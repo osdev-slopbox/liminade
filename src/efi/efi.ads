@@ -361,6 +361,7 @@ package EFI is
    Pixel_Red_Green_Blue_Reserved_8_Bit : constant := 0;
    Pixel_Blue_Green_Red_Reserved_8_Bit : constant := 1;
    Pixel_Bit_Mask                      : constant := 2;
+   Pixel_Blt_Only                      : constant := 3;
 
    type EFI_PIXEL_BITMASK is record
       Red_Reserved    : Unsigned_32;

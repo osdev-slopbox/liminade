@@ -64,6 +64,11 @@ package body EFI.GOP is
       end if;
       Info := As_Mode_Info (Mode.Info);
 
+      --  PixelBltOnly modes cannot be written through the framebuffer.
+      if Info.Pixel_Format = EFI.Pixel_Blt_Only then
+         return Result;
+      end if;
+
       Result.Present := True;
       Result.Physical_Address := Unsigned_64 (Mode.Frame_Buffer_Base);
       Result.Size := Mode.Frame_Buffer_Size;
@@ -74,13 +79,17 @@ package body EFI.GOP is
 
       case Info.Pixel_Format is
          when EFI.Pixel_Red_Green_Blue_Reserved_8_Bit =>
-            Result.Red_Size := 8;   Result.Red_Shift := 16;
-            Result.Green_Size := 8; Result.Green_Shift := 8;
-            Result.Blue_Size := 8;  Result.Blue_Shift := 0;
-         when EFI.Pixel_Blue_Green_Red_Reserved_8_Bit =>
+            --  Bytes in memory are R,G,B,X, so red is the *low* byte of the
+            --  little-endian 32-bit word.
             Result.Red_Size := 8;   Result.Red_Shift := 0;
             Result.Green_Size := 8; Result.Green_Shift := 8;
             Result.Blue_Size := 8;  Result.Blue_Shift := 16;
+         when EFI.Pixel_Blue_Green_Red_Reserved_8_Bit =>
+            --  Bytes in memory are B,G,R,X (what VBE/bochs and most firmware
+            --  hand out): red is the *high* byte.
+            Result.Red_Size := 8;   Result.Red_Shift := 16;
+            Result.Green_Size := 8; Result.Green_Shift := 8;
+            Result.Blue_Size := 8;  Result.Blue_Shift := 0;
          when others =>
             --  Bit-mask formats: derive shifts from the GOP bitmask.
             declare
