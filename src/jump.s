@@ -8,11 +8,15 @@
  *      the current instruction pointer and stack stay valid.
  *
  *  jump_to_kernel
- *      Set up the stack, clear interrupts and transfer control with a CALL so
- *      the callee sees the System V function-entry stack layout.
+ *      Install the Limine GDT/IDT, set the stack and the flags required by
+ *      the protocol, zero every general purpose register and transfer control
+ *      to the executable (invalid return address 0 pushed on the stack).
  *
  *  read_bsp_lapic_id
  *      CPUID leaf 1 EBX[31:24] (initial APIC ID) of the boot processor.
+ *
+ *  read_msr / write_msr
+ *      IA32 MSR access for the local-APIC setup.
  */
 
         .section .text
@@ -47,14 +51,92 @@ switch_page_tables:
 jump_to_kernel:
         cli
         movq    %rsi, %rsp              /* kernel stack top, 16-byte aligned */
-        xorl    %ebp, %ebp
+        lgdt    liminade_gdt_ptr(%rip)
+        lidt    liminade_idt_ptr(%rip)
+        pushq   $0x28                   /* reload CS from the new GDT */
+        leaq    .Ljtk_cs(%rip), %rax
+        pushq   %rax
+        lretq
+.Ljtk_cs:
+        movw    $0x30, %ax
+        movw    %ax, %ds
+        movw    %ax, %es
+        movw    %ax, %ss
+        movw    %ax, %fs
+        movw    %ax, %gs
         pushq   $2                      /* RFLAGS: interrupts off, DF clear */
         popfq
-        callq   *%rdi                   /* callee sees rsp % 16 == 8 */
+        pushq   $0                      /* invalid return address (protocol) */
+        pushq   %rdi                    /* entry point, consumed by RET */
+        xorl    %eax, %eax
+        xorl    %ebx, %ebx
+        xorl    %ecx, %ecx
+        xorl    %edx, %edx
+        xorl    %esi, %esi
+        xorl    %ebp, %ebp
+        xorl    %r8d, %r8d
+        xorl    %r9d, %r9d
+        xorl    %r10d, %r10d
+        xorl    %r11d, %r11d
+        xorl    %r12d, %r12d
+        xorl    %r13d, %r13d
+        xorl    %r14d, %r14d
+        xorl    %r15d, %r15d
+        xorl    %edi, %edi
+        ret
 1:      cli
         hlt
         jmp     1b
         .size   jump_to_kernel, . - jump_to_kernel
+
+        .section .rodata
+        .balign 16
+/*  Limine machine state GDT: null, 16-bit code/data, 32-bit code/data,
+ *  64-bit code (0x28) and 64-bit data (0x30).  */
+liminade_gdt:
+        .quad   0x0000000000000000
+        .quad   0x00009A000000FFFF
+        .quad   0x000093000000FFFF
+        .quad   0x00CF9A000000FFFF
+        .quad   0x00CF92000000FFFF
+        .quad   0x00AF9A000000FFFF
+        .quad   0x00CF92000000FFFF
+liminade_gdt_ptr:
+        .word   55
+        .quad   liminade_gdt
+liminade_idt_ptr:
+        .word   0                       /* no IDT: base 0, limit 0 */
+        .quad   0
+
+        .section .text
+
+        .globl  read_msr
+        .type   read_msr, @function
+read_msr:                               /* rdi = MSR index, returns rax */
+        movq    %rdi, %rcx
+        rdmsr
+        shlq    $32, %rdx
+        orq     %rdx, %rax
+        ret
+        .size   read_msr, . - read_msr
+
+        .globl  write_msr
+        .type   write_msr, @function
+write_msr:                              /* rdi = MSR index, rsi = value */
+        movq    %rsi, %rax
+        movq    %rax, %rdx
+        shrq    $32, %rdx
+        movq    %rdi, %rcx
+        wrmsr
+        ret
+        .size   write_msr, . - write_msr
+
+        .globl  read_tsc
+read_tsc:
+        rdtsc
+        shlq    $32, %rdx
+        orq     %rdx, %rax
+        ret
 
         .globl  read_bsp_lapic_id
         .type   read_bsp_lapic_id, @function

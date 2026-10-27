@@ -220,6 +220,8 @@ package body Limine_Protocol is
       Efi_Desc_Size  : Unsigned_64;
       Fb_Info        : EFI.GOP.Framebuffer_Info;
       Module_List    : Module_Array;
+      Mp_Info_Base   : Unsigned_64 := 0;
+      Mp_Flags       : Unsigned_32 := 0;
       Cmdline_Text   : String;
       Rsdp_Physical  : Unsigned_64;
       Has_Rsdp       : Boolean;
@@ -302,18 +304,16 @@ package body Limine_Protocol is
          end loop;
       end if;
 
-      --  MP info array (one entry per CPU the bootloader started).
+      --  MP info array: allocated and filled in by the MP package (it must be
+      --  identity mapped so parked APs can poll goto_address).
       if Cpu_List'Length > 0 then
-         Mp_Infos := Alloc (A, Unsigned_64 (Cpu_List'Length) * Limine.SIZE_MP_INFO);
-         Mp_Ptrs  := Alloc (A, Unsigned_64 (Cpu_List'Length) * 8);
+         Mp_Ptrs := Alloc (A, Unsigned_64 (Cpu_List'Length) * 8);
          for I in Cpu_List'Range loop
             declare
                Idx : constant Unsigned_64 := Unsigned_64 (I - Cpu_List'First);
-               Info_P : constant Unsigned_64 := Mp_Infos + Idx * Limine.SIZE_MP_INFO;
+               Info_P : constant Unsigned_64 :=
+                 Mp_Info_Base + Idx * Limine.SIZE_MP_INFO;
             begin
-               Zero (To_Address (Info_P), Limine.SIZE_MP_INFO);
-               W32 (Info_P + Limine.MP_INFO_PROCESSOR_ID, Cpu_List (I).Processor_Id);
-               W32 (Info_P + Limine.MP_INFO_LAPIC_ID, Cpu_List (I).Lapic_Id);
                W64 (Mp_Ptrs + Idx * 8, HHDM_Offset + Info_P);
             end;
          end loop;
@@ -404,7 +404,7 @@ package body Limine_Protocol is
                when Mp =>
                   Resp := Alloc (A, Limine.SIZE_MP_RESPONSE);
                   W64 (Resp + 0, 0);
-                  W32 (Resp + Limine.MP_FLAGS_RESULT, 0);
+                  W32 (Resp + Limine.MP_FLAGS_RESULT, Mp_Flags);
                   W32 (Resp + Limine.MP_BSP_LAPIC_ID, Bsp_Lapic_Id);
                   W64 (Resp + Limine.MP_CPU_COUNT, Unsigned_64 (Cpu_List'Length));
                   W64 (Resp + Limine.MP_CPUS, HHDM_Offset + Mp_Ptrs);

@@ -50,6 +50,7 @@ as -o "$BUILD/efi64_entry.o" "$SRC/efi64_entry.s"
 as -o "$BUILD/com1_io.o" "$SRC/com1_io.s"
 as -o "$BUILD/ms_abi.o" "$SRC/ms_abi.s"
 as -o "$BUILD/jump.o" "$SRC/jump.s"
+as -o "$BUILD/mp_tramp.o" "$SRC/mp_tramp.s"
 
 echo "==> linking freestanding ELF"
 gcc -nostdlib -static -no-pie \

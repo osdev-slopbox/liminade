@@ -101,6 +101,8 @@ package Limine_Protocol is
       Efi_Desc_Size  : Unsigned_64;
       Fb_Info        : EFI.GOP.Framebuffer_Info;
       Module_List    : Module_Array;
+      Mp_Info_Base   : Unsigned_64 := 0;
+      Mp_Flags       : Unsigned_32 := 0;
       Cmdline_Text   : String;
       Rsdp_Physical  : Unsigned_64;
       Has_Rsdp       : Boolean;

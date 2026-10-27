@@ -11,6 +11,7 @@ with Memory;
 with Limine;
 with Limine_Protocol;
 with Kernel_Loader;
+with MP;
 with Paging;
 with COM1;
 
@@ -198,8 +199,7 @@ package body Liminade is
         (others => Limine_Protocol.Empty_Module);
       Module_Count : Natural := 0;
       Bsp_Lapic    : Unsigned_32 := 0;
-      Cpus         : Limine_Protocol.Cpu_Array (1 .. 1) :=
-        (1 => (Processor_Id => 0, Lapic_Id => 0));
+      Cpus         : Limine_Protocol.Cpu_Array (1 .. MP.Max_Cpus);
 
       Arena_Phys   : EFI_PHYSICAL_ADDRESS := 0;
       Stack_Phys   : EFI_PHYSICAL_ADDRESS := 0;
@@ -474,43 +474,9 @@ package body Liminade is
       COM1.Put_Dec (Unsigned_64 (Map_Count));
       COM1.Put_Line ("");
 
-      Bsp_Lapic := Cpu_Lapic_Id;
-      Cpus (1) := (Processor_Id => 0, Lapic_Id => Bsp_Lapic);
-      Log_Value ("LIMINADE: BSP lapic id ", Unsigned_64 (Bsp_Lapic));
-
-      --  Build the Limine responses.
-      Limine_Protocol.Populate
-        (Requests        => Scan,
-         HHDM_Offset     => HHDM,
-         Arena_Physical  => Unsigned_64 (Arena_Phys),
-         Arena_Size      => Arena_Bytes,
-         Efi_Map         => Map_Buffer,
-         Efi_Map_Count   => Map_Count,
-         Efi_Desc_Size   => Desc_Size,
-         Fb_Info         => Framebuffer,
-         Module_List     => Modules (1 .. Module_Count),
-         Cmdline_Text    => "",
-         Rsdp_Physical   => Rsdp_Phys,
-         Has_Rsdp        => Has_Rsdp,
-         Boot_Timestamp  => Unix_Timestamp,
-         Cpu_List        => Cpus,
-         Bsp_Lapic_Id    => Bsp_Lapic,
-         Entry_Address   => Entry_Address,
-         Has_Entry_Point => Has_Entry,
-         Selected_Paging_Mode => Paging_Mode,
-         Ok              => Populate_Ok);
-
-      if not Populate_Ok then
-         Fatal ("building the Limine responses failed (unsupported paging mode?)");
-      end if;
-      Log_Value ("LIMINADE: paging mode ", Paging_Mode);
-      if Has_Entry then
-         Log_Value ("LIMINADE: entry point request ", Entry_Address);
-      else
-         Entry_Address := Kernel.Elf_Entry;
-      end if;
-
-      --  Build the kernel address space.
+      --  Build the kernel address space before the APs are released: they run
+      --  on these tables and must keep them until the executable switches to
+      --  its own address space.
       Root := Paging.New_PML4;
       Paging.Map_Range (Root, 0, 0, Unsigned_64 (4) * 1024 * 1024 * 1024,
                         Writable => True, Executable => True);
@@ -552,6 +518,13 @@ package body Liminade is
       end if;
       Log ("LIMINADE: page tables built");
 
+      --  Allocate everything the application processors need while the
+      --  firmware's boot services are still available.
+      MP.Prepare (Rsdp_Physical => Rsdp_Phys, Root => Root);
+      if MP.Count = 0 then
+         Fatal ("multiprocessor preparation failed");
+      end if;
+
       --  Leave boot services.
       for Attempt in 1 .. 4 loop
          St := EFI.Services.Exit_Boot_Services (Map_Key);
@@ -568,6 +541,54 @@ package body Liminade is
          Fatal ("ExitBootServices failed");
       end if;
       Log ("LIMINADE: boot services exited");
+
+      --  Release the application processors.  They park in long mode on the
+      --  page tables above until the executable writes goto_address.  This
+      --  has to happen after ExitBootServices: the firmware's MP support
+      --  re-parks every AP in its own idle loop while boot services are
+      --  being torn down, which would take the APs away from us.
+      MP.Release;
+
+      Bsp_Lapic := MP.Cpu (1).Lapic_Id;
+      for I in 1 .. MP.Count loop
+         Cpus (I) := (Processor_Id => MP.Cpu (I).Processor_Id,
+                      Lapic_Id     => MP.Cpu (I).Lapic_Id);
+      end loop;
+      Log_Value ("LIMINADE: BSP lapic id ", Unsigned_64 (Bsp_Lapic));
+
+      --  Build the Limine responses.  Nothing here needs boot services.
+      Limine_Protocol.Populate
+        (Requests        => Scan,
+         HHDM_Offset     => HHDM,
+         Arena_Physical  => Unsigned_64 (Arena_Phys),
+         Arena_Size      => Arena_Bytes,
+         Efi_Map         => Map_Buffer,
+         Efi_Map_Count   => Map_Count,
+         Efi_Desc_Size   => Desc_Size,
+         Fb_Info         => Framebuffer,
+         Module_List     => Modules (1 .. Module_Count),
+         Mp_Info_Base    => MP.Mp_Info_Base,
+         Mp_Flags        => MP.Flags,
+         Cmdline_Text    => "",
+         Rsdp_Physical   => Rsdp_Phys,
+         Has_Rsdp        => Has_Rsdp,
+         Boot_Timestamp  => Unix_Timestamp,
+         Cpu_List        => Cpus (1 .. MP.Count),
+         Bsp_Lapic_Id    => Bsp_Lapic,
+         Entry_Address   => Entry_Address,
+         Has_Entry_Point => Has_Entry,
+         Selected_Paging_Mode => Paging_Mode,
+         Ok              => Populate_Ok);
+
+      if not Populate_Ok then
+         Fatal ("building the Limine responses failed (unsupported paging mode?)");
+      end if;
+      Log_Value ("LIMINADE: paging mode ", Paging_Mode);
+      if Has_Entry then
+         Log_Value ("LIMINADE: entry point request ", Entry_Address);
+      else
+         Entry_Address := Kernel.Elf_Entry;
+      end if;
 
       Switch_Page_Tables (Root);
       Log ("LIMINADE: paging enabled, jumping to the kernel");
